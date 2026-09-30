@@ -1,0 +1,4 @@
+dearpygui>=2.3.1
+pygame>=2.0.0
+hid>=1.0.6
+evdev>=1.6.1
