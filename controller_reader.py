@@ -8,6 +8,7 @@ import threading
 import time
 import os
 import glob
+import struct
 
 
 class ControllerReader:
@@ -16,6 +17,11 @@ class ControllerReader:
         self._running = False
         self._thread = None
         self._joystick = None
+
+        self._touch_fd = None
+        self._touch_active = False
+        self._touch_x = 0.5
+        self._touch_y = 0.5
 
         self.state = {
             "connected":   False,
@@ -31,6 +37,8 @@ class ControllerReader:
             "sensitivity": {},      # axis_idx -> float (0.1-3.0)
             "battery_pct": None,    # int 0-100 or None
             "battery_status": None, # str or None
+            "touch_active": False,  # True if finger touching or clicked
+            "touch_pos":   (0.5, 0.5), # normalized (0.0 to 1.0) (x, y)
         }
         self._wants_batt_check = True  # Check once on startup
 
@@ -70,9 +78,46 @@ class ControllerReader:
                 "hats":        list(self.state["hats"]),
                 "battery_pct": self.state["battery_pct"],
                 "battery_status": self.state["battery_status"],
+                "touch_active": self.state["touch_active"],
+                "touch_pos":    self.state["touch_pos"],
             }
 
     # ── Internal ──────────────────────────────────────────────────────────────
+
+    def _init_touchpad(self):
+        try:
+            for event_path in glob.glob("/sys/class/input/event*"):
+                name_file = os.path.join(event_path, "device", "name")
+                if os.path.exists(name_file):
+                    with open(name_file) as f:
+                        name = f.read().lower()
+                    if "touchpad" in name and ("wireless controller" in name or "dualshock" in name):
+                        dev_node = os.path.join("/dev/input", os.path.basename(event_path))
+                        if os.path.exists(dev_node):
+                            self._touch_fd = os.open(dev_node, os.O_RDONLY | os.O_NONBLOCK)
+                            return
+        except Exception:
+            self._touch_fd = None
+
+    def _poll_touchpad(self):
+        if self._touch_fd is None:
+            self._init_touchpad()
+        if self._touch_fd is not None:
+            try:
+                while True:
+                    data = os.read(self._touch_fd, 24)
+                    if len(data) < 24:
+                        break
+                    sec, usec, ev_type, ev_code, ev_val = struct.unpack("qqHHi", data)
+                    if ev_type == 1 and ev_code == 330:  # BTN_TOUCH
+                        self._touch_active = bool(ev_val)
+                    elif ev_type == 3:  # EV_ABS
+                        if ev_code == 53:  # ABS_MT_POSITION_X (0-1920)
+                            self._touch_x = max(0.0, min(1.0, ev_val / 1920.0))
+                        elif ev_code == 54:  # ABS_MT_POSITION_Y (0-942)
+                            self._touch_y = max(0.0, min(1.0, ev_val / 942.0))
+            except (BlockingIOError, OSError):
+                pass
 
     def _read_battery(self):
         try:
@@ -173,11 +218,17 @@ class ControllerReader:
                         self.state["battery_pct"] = pct
                         self.state["battery_status"] = stat
 
+                # Poll Touchpad
+                self._poll_touchpad()
+                is_touched = self._touch_active or (len(buttons) > 11 and buttons[11])
+
                 with self._lock:
-                    self.state["axes"]     = proc_axes
-                    self.state["axes_raw"] = raw_axes
-                    self.state["buttons"]  = buttons
-                    self.state["hats"]     = hats
+                    self.state["axes"]         = proc_axes
+                    self.state["axes_raw"]     = raw_axes
+                    self.state["buttons"]      = buttons
+                    self.state["hats"]         = hats
+                    self.state["touch_active"] = is_touched
+                    self.state["touch_pos"]    = (self._touch_x, self._touch_y)
 
             except Exception as e:
                 print(f"[ControllerReader] read error: {e}")
@@ -186,6 +237,12 @@ class ControllerReader:
                 except Exception:
                     pass
                 self._joystick = None
+                if self._touch_fd is not None:
+                    try:
+                        os.close(self._touch_fd)
+                    except Exception:
+                        pass
+                    self._touch_fd = None
                 with self._lock:
                     self.state["connected"] = False
 

@@ -122,7 +122,11 @@ def _build_virtual_controller():
 
             # ── Touchpad & Center Buttons ──
             dpg.draw_rectangle([CX - 80, CY - 120], [CX + 80, CY - 20], color=C_BORDER, fill=C_IDLE, rounding=10, tag="vc_touch")
+            # Touchpad Lightbar Slit (DS4 v2 illuminated light strip)
+            dpg.draw_rectangle([CX - 62, CY - 116], [CX + 62, CY - 111], color=C_BORDER, fill=C_IDLE, rounding=2, tag="vc_touch_light")
             dpg.draw_text([CX - 30, CY - 75], "TOUCH", color=C_DIM, size=12)
+            # Interactive touch cursor dot
+            dpg.draw_circle([CX, CY - 70], 7, color=C_RED_BRIGHT, fill=C_RED, show=False, tag="vc_touch_dot")
             
             dpg.draw_circle([CX - 120, CY - 90], 8, color=C_BORDER, fill=C_IDLE, tag="vc_share")
             dpg.draw_text([CX - 145, CY - 110], "SHARE", color=C_DIM, size=10)
@@ -308,29 +312,57 @@ def update_frame():
 
     # ── Virtual Controller Update ──
     
-    # Face & Bumpers & Center mapping
-    # 0:X, 1:O, 2:Tri, 3:Sq, 4:L1, 5:R1, 8:Share, 9:Options, 10/12:PS, 13:Touch, 11:L3, 12:R3
-    v_map = {
-        0: "vc_x", 1: "vc_o", 2: "vc_tri", 3: "vc_sq",
-        4: "vc_l1", 5: "vc_r1",
-        8: "vc_share", 9: "vc_options", 10: "vc_l3", 11: "vc_r3",
-        12: "vc_ps", 13: "vc_touch"
+    # Verified PS4 Button Mapping (Linux Driver standard)
+    # 0:Cross, 1:Circle, 2:Square, 3:Triangle, 4:Share, 5:PS, 6:Options,
+    # 7:L3, 8:R3, 9:L1, 10:R1, 11:Touchpad
+    ps4_map = {
+        0: "vc_x",
+        1: "vc_o",
+        2: "vc_sq",
+        3: "vc_tri",
+        4: "vc_share",
+        5: "vc_ps",
+        6: "vc_options",
+        9: "vc_l1",
+        10: "vc_r1",
+        11: "vc_touch",
     }
-    for i in range(len(buttons)):
-        if i in v_map:
-            fill = C_PRESSED if buttons[i] else C_IDLE
-            color = C_RED if buttons[i] else C_BORDER
-            dpg.configure_item(v_map[i], fill=fill)
-            # Make sticks ring glow on L3/R3
-            if i == 10 or i == 11: # usually L3 / R3
-                ring_tag = "vc_l3" if i == 10 else "vc_r3"
-                pass 
+    for btn_idx, tag in ps4_map.items():
+        if btn_idx < len(buttons):
+            dpg.configure_item(tag, fill=C_PRESSED if buttons[btn_idx] else C_IDLE)
 
-    if len(buttons) > 11 and buttons[11]: dpg.configure_item("vc_l3", color=C_RED, thickness=2)
-    else: dpg.configure_item("vc_l3", color=C_IDLE, thickness=1)
-    
-    if len(buttons) > 12 and buttons[12]: dpg.configure_item("vc_r3", color=C_RED, thickness=2)
-    else: dpg.configure_item("vc_r3", color=C_IDLE, thickness=1)
+    # Stick clicks (L3 = button 7, R3 = button 8)
+    if len(buttons) > 7 and buttons[7]:
+        dpg.configure_item("vc_l3", color=C_RED, thickness=3)
+        dpg.configure_item("vc_lstick_dot", fill=C_RED_BRIGHT)
+    else:
+        dpg.configure_item("vc_l3", color=C_IDLE, thickness=1)
+        dpg.configure_item("vc_lstick_dot", fill=C_RED)
+
+    if len(buttons) > 8 and buttons[8]:
+        dpg.configure_item("vc_r3", color=C_RED, thickness=3)
+        dpg.configure_item("vc_rstick_dot", fill=C_RED_BRIGHT)
+    else:
+        dpg.configure_item("vc_r3", color=C_IDLE, thickness=1)
+        dpg.configure_item("vc_rstick_dot", fill=C_RED)
+
+    # Sticks & Center Coordinates
+    CX, CY = 440, 170
+
+    # ── Touchpad Light & Contact Tracking ──
+    touch_active = state.get("touch_active", False) or (len(buttons) > 11 and buttons[11])
+    touch_pos = state.get("touch_pos", (0.5, 0.5))
+
+    if touch_active:
+        dpg.configure_item("vc_touch_light", fill=C_RED_BRIGHT, color=C_RED_BRIGHT)
+        dpg.configure_item("vc_touch", fill=[55, 14, 18, 255], color=C_RED)
+        tx = (CX - 80) + touch_pos[0] * 160
+        ty = (CY - 120) + touch_pos[1] * 100
+        dpg.configure_item("vc_touch_dot", center=[tx, ty], show=True)
+    else:
+        dpg.configure_item("vc_touch_light", fill=C_IDLE, color=C_BORDER)
+        dpg.configure_item("vc_touch", fill=C_IDLE, color=C_BORDER)
+        dpg.configure_item("vc_touch_dot", show=False)
 
     # D-pad
     if hats:
@@ -341,7 +373,6 @@ def update_frame():
         dpg.configure_item("vc_dr", fill=C_PRESSED if hx > 0 else C_IDLE)
 
     # Sticks
-    CX, CY = 440, 170
     LS_X, LS_Y = CX - 100, CY + 60
     RS_X, RS_Y = CX + 100, CY + 60
     if len(axes) >= 2:
